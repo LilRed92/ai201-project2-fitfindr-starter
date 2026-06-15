@@ -64,9 +64,7 @@ Takes the listing the user is considering plus their wardrobe and asks the LLM t
 A single non-empty string with the outfit ideas in plain language, naming the new item and specific wardrobe pieces by their `name`. It's prose meant to be shown to the user, not a dict.
 
 **Empty wardrobe or only one item:**
-This is the edge case I want to spell out instead of waving at. I check `wardrobe["items"]` first.
-- If the list is empty, there's nothing to pair with, so I send the LLM a different prompt asking for general styling advice for the new item on its own: what kinds of bottoms or shoes would go with it, what aesthetic it fits, how to dress it up or down. The return is still a normal string, just advice instead of named pairings.
-- If there's exactly one item, I don't bail. I pass that single piece plus the new item and ask for one outfit built around the two of them, then let the LLM add a note about what else would round it out.
+This is the edge case I want to spell out instead of waving at. I check `wardrobe["items"]` first and count them. If there are fewer than 2 pieces, there's not enough to build a real outfit, so I skip the LLM call entirely and return a specific message instead, something like "There aren't enough wardrobe pieces to build an outfit around the [item] yet. Add at least two items and I'll put a full look together." Two reasons for cutting it off there: a one-piece closet can't make a full top-bottom-shoes look anyway, and there's no point spending an API call on a prompt with almost no context. The agent still gets a clean non-empty string back that it can show the user. Once there are 2 or more items, I format them into the prompt and ask for one or two outfits that pair the new item with specific pieces by name.
 
 **Most likely failure mode:**
 The LLM call itself fails (no network, bad `GROQ_API_KEY`, rate limit). Since the contract is never return an empty string and never raise, I wrap the call and on failure return a plain fallback string like "I couldn't generate an outfit right now, but this piece would pair well with simple basics in neutral colors." The loop still gets a usable string.
@@ -152,7 +150,7 @@ For each tool, describe the specific failure mode you're handling and what the a
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
 | search_listings | No listing matches the parsed query (returns `[]`) | First try the fallback: drop the size filter and search again, and if that finds something, show the results with a note like "Nothing matched size M, so here's what's out there in other sizes." If it's still empty after loosening, set `session["error"]` to a specific message that names the filters, e.g. "No listings under $30 matched 'vintage graphic tee'. Try raising your price or describing it differently," and stop before the other tools run. |
-| suggest_outfit | Wardrobe is empty (or has just one item) | Don't error. Switch to the general-advice prompt and return styling ideas for the item on its own (what to pair it with, what vibe it suits), so the user still gets a real suggestion. With one item, build the outfit around that piece plus the new item and add a note on what would round it out. |
+| suggest_outfit | Wardrobe has fewer than 2 items | Don't error and don't call the LLM with empty context. Return a specific message telling the user the wardrobe is too sparse to build a full outfit and asking them to add at least two pieces, so the agent has a clean string to show. |
 | create_fit_card | `outfit` is missing, empty, or whitespace | Return a descriptive string instead of raising, e.g. "Can't write a fit card without an outfit suggestion. Try the styling step first," and set `session["error"]` so the caller can still show the search result and outfit without a broken caption. If the LLM call itself fails, return a short fallback caption so the user isn't left with nothing. |
 
 ---
@@ -195,8 +193,8 @@ User query (natural language)
 [session has selected_item, no outfit_suggestion yet]
     │  READ session["selected_item"], session["wardrobe"]
     ├─► suggest_outfit(selected_item, wardrobe)
-    │       │  wardrobe["items"] == []  → general styling advice (still a string)
-    │       │  wardrobe["items"] != []  → outfit using owned pieces by name
+    │       │  fewer than 2 items  → "wardrobe too sparse" message (no LLM call)
+    │       │  2+ items            → outfit using owned pieces by name
     │       │  returns outfit string (always non-empty by design)
     │       │  WRITE session["outfit_suggestion"]
     │       │
