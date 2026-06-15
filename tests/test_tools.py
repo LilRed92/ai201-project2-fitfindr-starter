@@ -55,10 +55,18 @@ def test_suggest_with_example_wardrobe_returns_string():
     assert len(out.strip()) > 0
 
 
-def test_suggest_with_empty_wardrobe_returns_message():
-    out = suggest_outfit(_a_listing(), get_empty_wardrobe())
+def test_suggest_with_empty_wardrobe_gives_item_advice():
+    # An empty wardrobe should still return useful, item-specific styling
+    # advice (not an empty string, an exception, or a generic dead-end).
+    item = _a_listing()
+    out = suggest_outfit(item, get_empty_wardrobe())
     assert isinstance(out, str)
     assert len(out.strip()) > 0
+    out_low = out.lower()
+    tokens = item["title"].lower().split()
+    tokens += [t.lower() for t in item["style_tags"]]
+    tokens += [c.lower() for c in item["colors"]]
+    assert any(tok in out_low for tok in tokens)
 
 
 def test_suggest_references_the_item():

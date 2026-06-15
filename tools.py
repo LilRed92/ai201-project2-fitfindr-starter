@@ -140,45 +140,55 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     """
     items = wardrobe.get("items", []) if isinstance(wardrobe, dict) else []
 
-    # A wardrobe with fewer than 2 pieces isn't enough to build a real outfit.
-    # Don't waste an LLM call on it — hand the agent a clear message instead.
-    if len(items) < 2:
-        return (
-            f"There aren't enough wardrobe pieces to build an outfit around the "
-            f"{new_item.get('title', 'item')} yet. Add at least two items (something "
-            f"like a top, a bottom, and shoes) and I'll put a full look together."
-        )
-
-    # Format the wardrobe so the model can name specific pieces.
-    wardrobe_lines = []
-    for it in items:
-        colors = ", ".join(it.get("colors", []))
-        tags = ", ".join(it.get("style_tags", []))
-        line = f"- {it.get('name')} ({it.get('category')}; colors: {colors}; style: {tags}"
-        if it.get("notes"):
-            line += f"; note: {it['notes']}"
-        line += ")"
-        wardrobe_lines.append(line)
-    wardrobe_text = "\n".join(wardrobe_lines)
-
     item_colors = ", ".join(new_item.get("colors", []))
     item_tags = ", ".join(new_item.get("style_tags", []))
 
-    prompt = (
-        f"A shopper is considering this secondhand piece:\n"
-        f"Title: {new_item.get('title')}\n"
-        f"Description: {new_item.get('description')}\n"
-        f"Category: {new_item.get('category')}\n"
-        f"Colors: {item_colors}\n"
-        f"Style tags: {item_tags}\n"
-        f"Condition: {new_item.get('condition')}\n"
-        f"Price: ${new_item.get('price')}\n"
-        f"Platform: {new_item.get('platform')}\n\n"
-        f"Here is their current wardrobe:\n{wardrobe_text}\n\n"
-        f"Suggest one or two complete outfits that pair the "
-        f"{new_item.get('title')} with specific pieces from their wardrobe. "
-        f"Name the wardrobe pieces you use. Keep it practical and short."
-    )
+    if not items:
+        # Empty wardrobe: nothing to pair against, so give general styling
+        # advice for this specific piece instead of a dead-end message.
+        prompt = (
+            f"A shopper is considering this secondhand piece but hasn't entered "
+            f"any wardrobe items yet:\n"
+            f"Title: {new_item.get('title')}\n"
+            f"Description: {new_item.get('description')}\n"
+            f"Category: {new_item.get('category')}\n"
+            f"Colors: {item_colors}\n"
+            f"Style tags: {item_tags}\n"
+            f"Condition: {new_item.get('condition')}\n"
+            f"Price: ${new_item.get('price')}\n\n"
+            f"Give general styling advice for this specific piece: what kinds of "
+            f"items would pair well with it, what aesthetic it fits, and how to "
+            f"dress it up or down. Mention the {new_item.get('title')} by name. "
+            f"Keep it practical and short."
+        )
+    else:
+        # Format the wardrobe so the model can name specific pieces the user owns.
+        wardrobe_lines = []
+        for it in items:
+            colors = ", ".join(it.get("colors", []))
+            tags = ", ".join(it.get("style_tags", []))
+            line = f"- {it.get('name')} ({it.get('category')}; colors: {colors}; style: {tags}"
+            if it.get("notes"):
+                line += f"; note: {it['notes']}"
+            line += ")"
+            wardrobe_lines.append(line)
+        wardrobe_text = "\n".join(wardrobe_lines)
+
+        prompt = (
+            f"A shopper is considering this secondhand piece:\n"
+            f"Title: {new_item.get('title')}\n"
+            f"Description: {new_item.get('description')}\n"
+            f"Category: {new_item.get('category')}\n"
+            f"Colors: {item_colors}\n"
+            f"Style tags: {item_tags}\n"
+            f"Condition: {new_item.get('condition')}\n"
+            f"Price: ${new_item.get('price')}\n"
+            f"Platform: {new_item.get('platform')}\n\n"
+            f"Here is their current wardrobe:\n{wardrobe_text}\n\n"
+            f"Suggest one or two complete outfits that pair the "
+            f"{new_item.get('title')} with specific pieces from their wardrobe. "
+            f"Name the wardrobe pieces you use. Keep it practical and short."
+        )
 
     try:
         client = _get_groq_client()
@@ -192,7 +202,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         )
         return response.choices[0].message.content
     except Exception as exc:
-        return f"Sorry, I couldn't put an outfit together right now ({exc})."
+        return f"Sorry, I couldn't put an outfit together, because {exc}."
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -259,4 +269,4 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         )
         return response.choices[0].message.content
     except Exception as exc:
-        return f"Sorry, I couldn't write a fit card right now ({exc})."
+        return f"Sorry, I couldn't write a fit card, because {exc}."

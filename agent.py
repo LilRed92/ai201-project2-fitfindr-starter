@@ -18,6 +18,8 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -43,6 +45,77 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "fit_card": None,            # string returned by create_fit_card
         "error": None,               # set if the interaction ended early
     }
+
+
+# ── query parsing ─────────────────────────────────────────────────────────────
+
+def _parse_query(query: str) -> dict:
+    """
+    Pull a description, size, and max_price out of a natural language query.
+
+    I cut off any "what I own" clause (e.g. "I mostly wear baggy jeans") before
+    parsing, so the things the user already owns don't end up scored as things
+    they're searching for. Size and price come out via regex; whatever text is
+    left after stripping those becomes the description.
+    """
+    text = query.strip()
+
+    # Drop a trailing wardrobe-context clause so it doesn't pollute the search.
+    cut = re.search(
+        r"\bi\s+(?:mostly\s+|usually\s+|normally\s+|often\s+)?wear\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if cut:
+        text = text[: cut.start()]
+
+    # size: "size M", "in size 8", "size: XXS"
+    size = None
+    m_size = re.search(r"\bsize[:\s]+([A-Za-z0-9/.]+)", text, flags=re.IGNORECASE)
+    if m_size:
+        size = m_size.group(1).strip(" .,/").upper() or None
+
+    # max_price: prefer "under/below/less than $X", else fall back to a bare "$X"
+    max_price = None
+    m_price = re.search(
+        r"(?:under|below|less than|<)\s*\$?\s*(\d+(?:\.\d+)?)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not m_price:
+        m_price = re.search(r"\$\s*(\d+(?:\.\d+)?)", text)
+    if m_price:
+        max_price = float(m_price.group(1))
+
+    # description = the text with the size and price phrases removed
+    description = text
+    if m_size:
+        description = description.replace(m_size.group(0), " ")
+    if m_price:
+        description = description.replace(m_price.group(0), " ")
+    description = re.sub(r"[,.]", " ", description)
+    description = re.sub(r"\s+", " ", description).strip()
+
+    return {"description": description, "size": size, "max_price": max_price}
+
+
+# These prefixes match the error strings the tools in tools.py return, so the
+# loop can tell an error result apart from a real suggestion/caption without
+# changing the tools.
+_OUTFIT_ERROR_PREFIXES = (
+    "Sorry, I couldn't put an outfit together, because",
+)
+_FITCARD_ERROR_PREFIXES = (
+    "Can't write a fit card",
+    "Sorry, I couldn't write a fit card, because",
+)
+
+
+def _looks_like_error(text: str, prefixes: tuple) -> bool:
+    """True if a tool returned an empty string or one of its error messages."""
+    if not text or not text.strip():
+        return True
+    return text.startswith(prefixes)
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
@@ -92,9 +165,53 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: parse the query into search parameters.
+    session["parsed"] = _parse_query(query)
+    parsed = session["parsed"]
+
+    # Step 3: search. Look at what came back before doing anything else.
+    results = search_listings(
+        parsed["description"], parsed["size"], parsed["max_price"]
+    )
+    session["search_results"] = results
+
+    if not results:
+        # No listings matched. Stop here, don't touch the styling tools.
+        filters = []
+        if parsed["max_price"] is not None:
+            filters.append(f"under ${parsed['max_price']:.0f}")
+        if parsed["size"]:
+            filters.append(f"in size {parsed['size']}")
+        filter_text = " " + " ".join(filters) if filters else ""
+        desc = parsed["description"] or query
+        session["error"] = (
+            f"No listings matched '{desc}'{filter_text}. "
+            f"Try raising your price, dropping the size, or describing it differently."
+        )
+        return session
+
+    # Step 4: pick the top-ranked listing.
+    session["selected_item"] = results[0]
+
+    # Step 5: suggest an outfit. An empty wardrobe still returns useful general
+    # styling advice, so the only thing that stops the loop here is an actual
+    # LLM failure coming back as an error string.
+    suggestion = suggest_outfit(session["selected_item"], wardrobe)
+    if _looks_like_error(suggestion, _OUTFIT_ERROR_PREFIXES):
+        session["error"] = suggestion
+        return session
+    session["outfit_suggestion"] = suggestion
+
+    # Step 6: turn the outfit into a fit card.
+    card = create_fit_card(session["outfit_suggestion"], session["selected_item"])
+    if _looks_like_error(card, _FITCARD_ERROR_PREFIXES):
+        session["error"] = card
+    else:
+        session["fit_card"] = card
+
+    # Step 7: hand the whole session back.
     return session
 
 
