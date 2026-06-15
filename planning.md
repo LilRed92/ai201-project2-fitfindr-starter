@@ -132,18 +132,50 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 ## A Complete Interaction (Step by Step)
 
-Write out what a full user interaction looks like from start to finish — tool call by tool call. Use a specific example query.
+### What FitFindr needs to do end to end
 
-**Example user query:** "I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?"
+A user sends a casual request, and `search_listings` runs first. It removes anything in `listings.json` priced over `max_price`, filters out sizes that don't match, and then ranks the remaining listings by how well the user's `description` overlaps with each one's `title`, `description`, and `style_tags`, returning the dicts best match first. The top listing then goes into `suggest_outfit` along with the user's wardrobe (either the `example_wardrobe` from `wardrobe_schema.json` or an empty one), where it gets paired against closet pieces by `category`, `colors`, and `style_tags`. The resulting outfit text and that same listing dict are passed to `create_fit_card` to produce the caption. The case I need to handle carefully is an empty search result: if `search_listings` returns an empty list, the steps after it should not run, since there is no real item to style. In that case the agent stops the chain and reports that it found nothing.
 
-**Step 1:**
-<!-- What does the agent do first? Which tool is called? With what input? -->
+### Traced walkthrough
 
-**Step 2:**
-<!-- What happens next? What was returned from step 1? What tool is called now? -->
+**Example user query:** "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers."
 
-**Step 3:**
-<!-- Continue until the full interaction is complete -->
+**Step 1 — search_listings:**
+The agent pulls three values out of the request and calls `search_listings(description="vintage graphic tee", size="M", max_price=30.00)`.
+
+Inside the tool: load all listings, drop anything over $30.00, then keep only the sizes that match "M" case-insensitively. The size matching is looser than I expected at first. "M" is a substring of "S/M", so a listing tagged `"S/M"` still passes the filter. That is worth noting, because several listings use combined sizes. The listings that remain are then scored on how many of the words "vintage", "graphic", and "tee" appear in the title, description, and `style_tags`.
+
+The best match that survives is **lst_002**, the "Y2K Baby Tee — Butterfly Print". Its `size` is "S/M" (clears the M filter), its `price` is 18.00 (under the cap), and its `style_tags` are `["y2k", "vintage", "graphic tee", "cottagecore"]`, so it scores on both "vintage" and "graphic tee".
+
+**Step 2 — the top result:**
+The dict that comes back looks like this:
+
+```json
+{
+  "id": "lst_002",
+  "title": "Y2K Baby Tee — Butterfly Print",
+  "category": "tops",
+  "style_tags": ["y2k", "vintage", "graphic tee", "cottagecore"],
+  "size": "S/M",
+  "condition": "excellent",
+  "price": 18.00,
+  "colors": ["white", "pink", "purple"],
+  "brand": null,
+  "platform": "depop"
+}
+```
+
+One thing to watch is that `brand` is `null` here, which is common in this dataset, so any code that displays the brand has to handle it being missing.
+
+**Step 3 — suggest_outfit:**
+Next the agent calls `suggest_outfit(new_item=<the lst_002 dict>, wardrobe=get_example_wardrobe())`. The wardrobe already contains the pieces the user described: `w_001` "Baggy straight-leg jeans, dark wash" (`category` bottoms, with "baggy" in its `style_tags`) and `w_007` "Chunky white sneakers" (`category` shoes, with "chunky" in its tags). The tool reads the tee's `colors` and `style_tags`, looks across the wardrobe `items` by `category`, and assembles an outfit: the butterfly tee with the baggy dark-wash jeans and the chunky white sneakers, possibly with `w_006`, the vintage black denim jacket, layered on top.
+
+**Step 4 — create_fit_card:**
+The outfit string and the lst_002 dict are passed to `create_fit_card`, which returns a short caption that names the tee, its $18 price, and that it is listed on depop.
 
 **Final output to user:**
-<!-- What does the user actually see at the end? -->
+The user sees the matched listing, an outfit built from their own closet, and a caption they could post.
+
+### Error path (search returns nothing)
+
+Suppose the user asks for the same tee but "under $10". `search_listings` filters out every listing and returns `[]`. With no top result, the agent does not call `suggest_outfit` or `create_fit_card`. It tells the user that nothing matched and points to whichever filter was likely too tight, such as the price ceiling or the size, so they can loosen one and try again. Because the tool returns an empty list instead of raising, this stays a normal branch in the planning loop rather than an error.

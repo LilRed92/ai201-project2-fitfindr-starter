@@ -14,3 +14,13 @@ env/
 
 # macOS
 .DS_Store
+
+# User
+.history/
+.husky/
+.ai-commit-rules.txt
+generate-commit.js
+node_modules/
+package-lock.json
+package.json
+.vscode/
