@@ -44,6 +44,7 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
         "error": None,               # set if the interaction ended early
+        "notice": None,              # user-facing note when a filter was relaxed
     }
 
 
@@ -177,19 +178,38 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     )
     session["search_results"] = results
 
+    # Fallback (stretch): if nothing matched and a size filter was in play, the
+    # size is the likely culprit, since the data uses inconsistent size strings.
+    # Drop it, search again, and remember what we relaxed so the user gets told.
+    if not results and parsed["size"] is not None:
+        relaxed = search_listings(parsed["description"], None, parsed["max_price"])
+        if relaxed:
+            results = relaxed
+            session["search_results"] = relaxed
+            session["notice"] = (
+                f"Nothing matched size {parsed['size']}, so I dropped the size filter "
+                f"and searched without it. Here's what's available in other sizes."
+            )
+
     if not results:
-        # No listings matched. Stop here, don't touch the styling tools.
-        filters = []
-        if parsed["max_price"] is not None:
-            filters.append(f"under ${parsed['max_price']:.0f}")
-        if parsed["size"]:
-            filters.append(f"in size {parsed['size']}")
-        filter_text = " " + " ".join(filters) if filters else ""
+        # Nothing matched, even after loosening. Stop, don't touch styling tools.
         desc = parsed["description"] or query
-        session["error"] = (
-            f"No listings matched '{desc}'{filter_text}. "
-            f"Try raising your price, dropping the size, or describing it differently."
+        price_bit = (
+            f" under ${parsed['max_price']:.0f}"
+            if parsed["max_price"] is not None
+            else ""
         )
+        if parsed["size"] is not None:
+            session["error"] = (
+                f"No listings matched '{desc}'{price_bit}, even after I ignored the "
+                f"size {parsed['size']} filter. Try raising your price or describing "
+                f"it differently."
+            )
+        else:
+            session["error"] = (
+                f"No listings matched '{desc}'{price_bit}. Try raising your price or "
+                f"describing it differently."
+            )
         return session
 
     # Step 4: pick the top-ranked listing.

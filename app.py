@@ -69,6 +69,9 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         f"Tags: {', '.join(item['style_tags'])}\n\n"
         f"{item['description']}"
     )
+    # If the agent relaxed a filter to find this, tell the user up top.
+    if session.get("notice"):
+        listing_text = f"{session['notice']}\n\n{listing_text}"
     return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 

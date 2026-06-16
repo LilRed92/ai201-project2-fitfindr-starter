@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools import search_listings, suggest_outfit, create_fit_card
+from agent import run_agent
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
 
 
@@ -100,3 +101,24 @@ def test_fit_card_varies():
     a = create_fit_card(_OUTFIT, item)
     b = create_fit_card(_OUTFIT, item)
     assert a != b
+
+
+# ── planning loop: retry-with-fallback (stretch) ─────────────────────
+
+def test_agent_retries_without_size_when_size_blocks_results():
+    # "XXL" matches no tee, but dropping the size filter should find vintage
+    # tees. The agent should recover and tell the user it relaxed the size.
+    session = run_agent("vintage graphic tee size XXL under $30", get_example_wardrobe())
+    assert session["error"] is None
+    assert len(session["search_results"]) > 0
+    assert session["notice"] is not None
+    assert "size" in session["notice"].lower()
+
+
+def test_agent_errors_when_nothing_matches_even_after_fallback():
+    # Even with the size filter dropped, nothing matches "designer ballgown",
+    # so the agent should error out and never reach the styling tools.
+    session = run_agent("designer ballgown size XXS under $5", get_example_wardrobe())
+    assert session["error"] is not None
+    assert session["outfit_suggestion"] is None
+    assert session["fit_card"] is None

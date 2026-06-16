@@ -25,7 +25,7 @@ Searches the 40 mock listings for items matching what the user described, then n
 **How each filter works:**
 - `price`: keep the listing if `price <= max_price`. Skipped when max_price is None.
 - `size`: keep the listing if the lowercased `size` argument appears anywhere inside the listing's lowercased `size` string. Skipped when size is None. This is the loosest part of the whole design, since "M" lives inside a lot of strings.
-- `description`: this is scoring, not a hard filter. Split the description into words, then count how many show up across the listing's `title`, `description`, and `style_tags`. Since `style_tags` is a list, I join it into one string (or check each tag) before counting. A listing that scores 0 gets dropped.
+- `description`: this is scoring, not a hard filter. Split the description into words, then count how many show up across the listing's `title`, `description`, `style_tags`, and `category`. Since `style_tags` is a list, I join it into one string (or check each tag) before counting. A listing that scores 0 gets dropped.
 
 **What it returns (success):**
 A list of listing dicts, sorted by score highest to lowest. Each dict has exactly these keys:
@@ -57,7 +57,7 @@ The description gets parsed into something that scores zero against everything (
 Takes the listing the user is considering plus their wardrobe and asks the LLM to put together one or two full outfits using that item with pieces the user already owns. Returns the suggestion as text.
 
 **Input parameters:**
-- `new_item` (dict): one listing dict from `search_listings`. The fields this function actually reads are `title` (so it can name the piece), `category`, `colors`, and `style_tags` (so the LLM knows what it is and what vibe it carries). It doesn't need `price`, `condition`, or `platform` to build an outfit.
+- `new_item` (dict): one listing dict from `search_listings`. The prompt gives the model the item's `title`, `description`, `category`, `colors`, `style_tags`, `condition`, and `price` so it has the full picture, with `title`, `category`, `colors`, and `style_tags` doing the most work for the actual styling.
 - `wardrobe` (dict): the wardrobe in the shape from `wardrobe_schema.json`. It has one entry, `items`, which is a list of wardrobe dicts. Each wardrobe item has `id`, `name`, `category`, `colors`, `style_tags`, and an optional `notes` that can be null. This comes from `get_example_wardrobe()` or `get_empty_wardrobe()`.
 
 **What it returns (success):**
@@ -140,6 +140,7 @@ The fields and who touches them:
 - `outfit_suggestion` (str | None): written from `suggest_outfit`, read by `create_fit_card`.
 - `fit_card` (str | None): written from `create_fit_card`. The final output.
 - `error` (str | None): None unless a step bailed early. The caller reads this before trusting anything else.
+- `notice` (str | None): set when the agent relaxes a filter (like dropping the size after an empty search) so the UI can tell the user what changed.
 
 So the find from `search_listings` flows into `suggest_outfit` as `selected_item` without the user retyping it, and the outfit text flows into `create_fit_card` the same way. The chain is search_results → selected_item → outfit_suggestion → fit_card, each one hop, all parked on the session.
 
@@ -241,7 +242,7 @@ I'll give Claude the Planning Loop section, the State Management section, and th
 
 ### What FitFindr needs to do end to end
 
-A user sends a casual request, and `search_listings` runs first. It removes anything in `listings.json` priced over `max_price`, filters out sizes that don't match, and then ranks the remaining listings by how well the user's `description` overlaps with each one's `title`, `description`, and `style_tags`, returning the dicts best match first. The top listing then goes into `suggest_outfit` along with the user's wardrobe (either the `example_wardrobe` from `wardrobe_schema.json` or an empty one), where it gets paired against closet pieces by `category`, `colors`, and `style_tags`. The resulting outfit text and that same listing dict are passed to `create_fit_card` to produce the caption. The case I need to handle carefully is an empty search result: if `search_listings` returns an empty list, the steps after it should not run, since there is no real item to style. In that case the agent stops the chain and reports that it found nothing.
+A user sends a casual request, and `search_listings` runs first. It removes anything in `listings.json` priced over `max_price`, filters out sizes that don't match, and then ranks the remaining listings by how well the user's `description` overlaps with each one's `title`, `description`, `style_tags`, and `category`, returning the dicts best match first. The top listing then goes into `suggest_outfit` along with the user's wardrobe (either the `example_wardrobe` from `wardrobe_schema.json` or an empty one), where it gets paired against closet pieces by `category`, `colors`, and `style_tags`. The resulting outfit text and that same listing dict are passed to `create_fit_card` to produce the caption. The case I need to handle carefully is an empty search result: if `search_listings` returns an empty list, the steps after it should not run, since there is no real item to style. In that case the agent stops the chain and reports that it found nothing.
 
 ### Traced walkthrough
 
@@ -253,7 +254,7 @@ The loop reads the query and pulls out three values, writing them to `session["p
 **Step 2, search_listings:**
 The session has `parsed` but no `search_results`, so the loop calls `search_listings(description="vintage graphic tee", size="M", max_price=30.00)`.
 
-Inside: load all listings, drop anything over $30.00, then keep only sizes where "m" appears in the size string. That substring rule is the loosest part of the design, since "M" sits inside "S/M" and "M/L" too, so combined sizes pass. Whatever survives gets scored on how many of "vintage", "graphic", "tee" turn up in the title, description, and `style_tags`.
+Inside: load all listings, drop anything over $30.00, then keep only sizes where "m" appears in the size string. That substring rule is the loosest part of the design, since "M" sits inside "S/M" and "M/L" too, so combined sizes pass. Whatever survives gets scored on how many of "vintage", "graphic", "tee" turn up in the title, description, `style_tags`, and `category`.
 
 The top match is **lst_002**, the "Y2K Baby Tee — Butterfly Print": `size` "S/M" (clears the M filter), `price` 18.00 (under the cap), `style_tags` `["y2k", "vintage", "graphic tee", "cottagecore"]` (scores on both "vintage" and "graphic tee"). The return is a list with lst_002 first, and it gets written to `session["search_results"]`.
 
